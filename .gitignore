@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+# Generated STAN preprocessing cache; rebuild with load.py on the server.
+data/*_data.pkl
+
+# Training outputs/checkpoints.
+*.pth
+*.pt
+*.log
+*.err
+
+# Local result folders.
+结果/
+써벎/
