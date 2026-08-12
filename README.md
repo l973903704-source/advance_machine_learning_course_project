@@ -1,139 +1,97 @@
-# Advance Machine Learning Course Project
+# Collaborative STAN for Next-POI Recommendation
 
-本仓库是高级机器学习课程项目代码，主要围绕 POI（Point of Interest）推荐任务展开，包含数据预处理、低频 POI 过滤实验、STAN 相关模型训练，以及邻居协同增强版本的实验脚本。
+A research-oriented extension of the Spatio-Temporal Attention Network (STAN) for next-point-of-interest recommendation. The project preserves the original two-stage spatio-temporal attention path and injects a candidate-conditioned collaborative term into the second matching stage.
 
-英文版运行说明见 [README_EN.md](README_EN.md)。
+## Main contribution
 
-## 项目结构
+For a candidate POI \(l\), the baseline matching score is extended with collaborative evidence:
+
+\[
+s_l = s_l^{\text{STAN}} + \lambda C(h,l)
+\]
+
+Three formulations of \(C\) are implemented:
+
+1. **Prototype:** cosine similarity between the trajectory representation and a destination prototype updated with momentum.
+2. **Neighbor-shared prototype:** a distance-weighted mixture of nearby destination prototypes. This was the strongest variant in the experiments.
+3. **Contrastive:** a learned destination bank and projection head trained with an auxiliary contrastive objective.
+
+## Results
+
+The table reports the best validation-Recall@5 epoch for the neighbor-shared variant and the corresponding test metrics. Increasing the minimum POI frequency produced a cleaner, less sparse benchmark and stronger ranking performance.
+
+| NYC split | Best val R@5 | Test R@5 | Test R@10 |
+|---|---:|---:|---:|
+| Minimum 10 visits | 0.3333 | 0.3407 | 0.4386 |
+| Minimum 20 visits | 0.4615 | 0.4347 | 0.5162 |
+| Minimum 50 visits | 0.5152 | 0.4848 | 0.5549 |
+
+![Threshold comparison](assets/all_thresholds_test_recall.png)
+
+<details>
+<summary>Training curves</summary>
+
+![NYC min 10](assets/nyc_min10_curves.png)
+
+![NYC min 20](assets/nyc_min20_curves.png)
+
+![NYC min 50](assets/nyc_min50_curves.png)
+
+</details>
+
+## Code structure
 
 ```text
-.
-├── data/
-│   ├── NYC.npy
-│   └── NYC_POI.npy
-├── collab_common.py
-├── layers.py
-├── load.py
-├── models.py
-├── run_stan_collab.sh
-├── train.py
-├── train_contrastive.py
-├── train_neighbor.py
-├── train_proto.py
-├── README.md
-└── README_EN.md
+load.py                 trajectory preprocessing and spatial matrices
+models.py               baseline STAN model
+layers.py               attention layers
+train.py                baseline training/evaluation
+collab_common.py        collaborative memories, models and trainer
+train_proto.py          prototype variant
+train_neighbor.py       neighbor-shared prototype variant
+train_contrastive.py    contrastive variant
+run_stan_collab.sh      reproducible SLURM entry point
 ```
 
-主要文件说明：
-
-- `load.py`：数据预处理与低频 POI 过滤。
-- `models.py`、`layers.py`：模型结构与网络层定义。
-- `train.py`：基础训练入口。
-- `train_neighbor.py`：邻居协同版本训练入口。
-- `train_contrastive.py`：对比学习相关训练入口。
-- `train_proto.py`：原型相关训练入口。
-- `collab_common.py`：协同增强实验中的公共工具函数。
-- `run_stan_collab.sh`：用于服务器 Slurm 环境的实验提交脚本。
-
-## 环境依赖
-
-推荐使用 Python 3.7 及以上版本。
-
-主要依赖：
+## Setup
 
 ```bash
-pip install numpy joblib tqdm torch matplotlib
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-如果在服务器上运行，建议使用 Conda 创建独立环境，并根据服务器 CUDA 版本安装对应的 PyTorch。
-
-## 数据准备
-
-项目默认需要以下原始数据文件：
+Place the public NYC check-in arrays under `data/`:
 
 ```text
 data/NYC.npy
 data/NYC_POI.npy
 ```
 
-预处理缓存文件 `data/NYC_data.pkl` 不需要上传到 GitHub，可在本地或服务器重新生成：
+The dataset is not redistributed here. Large preprocessing caches, checkpoints and raw logs are also excluded.
+
+Generate a filtered split, then run a collaborative model:
 
 ```bash
-python load.py --dname NYC
+python load.py --dname NYC --output_dname NYC_min20 \
+  --min_loc_visits 20 --min_user_checkins 6
+python train_neighbor.py --dname NYC_min20 --part 0 --epochs 30 \
+  --collab_weight 0.5 --top_k 16 --neighbor_temperature 1.0
 ```
 
-## 低频 POI 过滤实验
-
-可以通过 `load.py` 生成不同过滤阈值的数据集。例如：
+On a SLURM cluster:
 
 ```bash
-python load.py \
-  --dname NYC \
-  --output_dname NYC_min20 \
-  --min_loc_visits 20 \
-  --min_user_checkins 6
+PROJECT_DIR=/path/to/project sbatch run_stan_collab.sh neighbor NYC_min20 0 30
 ```
 
-生成后会在 `data/` 目录下得到类似文件：
+## Experimental safeguards
 
-```text
-data/NYC_min20.npy
-data/NYC_min20_POI.npy
-data/NYC_min20_data.pkl
-```
+- Prototype memories are updated only from training prefixes.
+- Validation and test labels never update the collaborative memory.
+- The contrastive destination bank is learned only through training supervision.
+- The original one-user-at-a-time trajectory loop is retained to minimize unintended changes to the baseline.
 
-也可以将 `--min_loc_visits` 改为 `30`、`50` 等阈值，用于比较不同过滤强度对推荐效果的影响。
+## Attribution and scope
 
-## 运行训练
-
-基础训练可参考：
-
-```bash
-python train.py --dname NYC
-```
-
-邻居协同版本可参考：
-
-```bash
-python train_neighbor.py --dname NYC_min20
-```
-
-具体参数请结合各训练脚本中的命令行参数设置。
-
-## Slurm 服务器运行
-
-仓库提供了 Slurm 提交脚本：
-
-```text
-run_stan_collab.sh
-```
-
-提交任务前需要设置项目路径：
-
-```bash
-PROJECT_DIR=/path/to/your/project sbatch run_stan_collab.sh neighbor NYC_min20 0 30
-```
-
-参数含义：
-
-- `neighbor`：使用邻居协同版本。
-- `NYC_min20`：数据集名称。
-- `0`：使用全部用户。
-- `30`：训练 30 个 epoch。
-
-如果服务器的分区、GPU、内存或 Conda 环境不同，请先修改 `run_stan_collab.sh` 中对应配置，或通过环境变量覆盖。
-
-## 输出文件
-
-训练过程中通常会生成：
-
-- `.log`：训练配置、损失、验证集和测试集指标。
-- `.err`：Slurm 错误输出和进度条信息。
-- `.pth` / `.pt`：模型 checkpoint。
-- `data/*_data.pkl`：预处理缓存。
-
-这些文件通常较大，已经在 `.gitignore` 中排除，不建议提交到仓库。
-
-## 备注
-
-本项目用于课程实验与结果复现。更详细的实验流程、Slurm 参数说明和日志解释可查看 [README_EN.md](README_EN.md)。
+This is a course research reproduction and extension of STAN, not a claim of authorship of the baseline architecture or dataset. The collaborative term, its three variants, experiment runner and threshold study are the focus of this repository. Refer to the original STAN publication and its official implementation when reusing the baseline code. No license is asserted here for upstream code or data.
